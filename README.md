@@ -1,9 +1,11 @@
-# Sample AI Tutor App (Flask + OpenRouter)
+# Sample AI Tutor App (Flask + OpenRouter + SQLite)
 
-A minimal Flask web app that sends tutor questions to OpenRouter using:
+A Flask app that sends tutor questions to OpenRouter and stores all responses in SQLite so everyone can see recent saved sessions.
+
 - **Model**: `google/gemini-2.5-flash-lite`
 - **Endpoint**: `POST /api/v1/chat/completions`
 - **Structured JSON response** using `response_format.type = json_schema`
+- **Persistence**: SQLite database (`tutor_sessions.db` by default)
 
 ## Setup
 
@@ -16,11 +18,17 @@ export OPENROUTER_API_KEY="..."
 python app.py
 ```
 
-Open http://127.0.0.1:5000
+Open: http://127.0.0.1:5000
 
-## API route
+## Environment variables
 
-`POST /api/tutor`
+- `OPENROUTER_API_KEY` (required)
+- `DATABASE_PATH` (optional, default: `tutor_sessions.db`)
+
+## API routes
+
+### `POST /api/tutor`
+Creates a tutor response via OpenRouter, validates/parses JSON output, and saves session to SQLite.
 
 Request body:
 
@@ -31,17 +39,6 @@ Request body:
 }
 ```
 
-Response shape:
+### `GET /api/history`
+Returns up to 50 most recent saved tutor sessions.
 
-```json
-{
-  "model": "google/gemini-2.5-flash-lite",
-  "result": {
-    "concept_summary": "...",
-    "explanation": "...",
-    "worked_example": "...",
-    "check_understanding": ["...", "..."],
-    "next_step_hint": "..."
-  }
-}
-```
