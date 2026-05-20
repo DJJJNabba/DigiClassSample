@@ -1,136 +1,1243 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Tutor (OpenRouter + Gemini 2.5 Flash Lite)</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
-  </head>
-  <body>
-    <main class="container">
-      <header class="header">
-        <h1>AI Tutor</h1>
-        <p>Model: <code>{{ model }}</code></p>
-      </header>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DigiClass AI Tutor</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
 
-      <section class="panel">
-        <h2>Ask a question</h2>
-        <form id="tutor-form">
-          <label>Grade level <input name="grade_level" value="middle school" /></label>
-          <label>Question <textarea name="question" rows="4" placeholder="Ask a math, science, or writing question..." required></textarea></label>
-          <button type="submit">Get tutor response</button>
+<!-- ── TOP HEADER ── -->
+<header class="app-header">
+  <div class="header-brand">
+    <span class="brand-icon">🎓</span>
+    <div>
+      <div class="brand-name">DigiClass AI Tutor</div>
+      <div class="brand-sub">Model: <code>{{ model }}</code></div>
+    </div>
+  </div>
+  <div class="role-switcher">
+    <span class="role-label">Viewing as:</span>
+    {% for uid, name, role in demo_users %}
+    <button class="role-btn {{ role }}" data-user-id="{{ uid }}" data-role="{{ role }}" data-name="{{ name }}">
+      <span class="role-icon">{{ '👨‍🎓' if role == 'student' else ('👩‍🏫' if role == 'teacher' else '👩‍💼') }}</span>
+      <span class="role-btn-text">{{ name }}<br><small>{{ role.title() }}</small></span>
+    </button>
+    {% endfor %}
+  </div>
+</header>
+
+<!-- ── CONTEXT BAR ── -->
+<div class="context-bar" id="context-bar">
+  <div class="context-user" id="context-user">Hamish · Student</div>
+  <div class="context-desc" id="context-desc">Generate content, practise questions, track your progress</div>
+  <div class="context-badge" id="context-badge">STUDENT</div>
+</div>
+
+<!-- ── TAB NAV ── -->
+<nav class="tab-nav" id="tab-nav"></nav>
+
+<!-- ── MAIN PANELS ── -->
+<main class="app-main" id="app-main">
+
+  <!-- GENERATE -->
+  <section class="panel" id="panel-generate">
+    <div class="panel-header">
+      <h2>Generate Learning Content</h2>
+      <p class="panel-desc">Use AI to create practice quizzes or flashcard sets on any topic. Generated content is saved as <span class="badge pending">pending</span> until a teacher approves it.</p>
+    </div>
+    <div class="two-col">
+      <div>
+        <form id="generate-form" class="form-card">
+          <div class="form-row">
+            <label class="form-label">Subject
+              <select id="gen-subject" class="form-control">
+                <option value="">— Any subject —</option>
+              </select>
+            </label>
+            <label class="form-label">Topic <span class="required">*</span>
+              <input id="gen-topic" type="text" class="form-control" placeholder="e.g. Binary Search Trees" required />
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Difficulty
+              <div class="radio-group">
+                <label class="radio-option"><input type="radio" name="gen-difficulty" value="easy" /> Easy</label>
+                <label class="radio-option"><input type="radio" name="gen-difficulty" value="medium" checked /> Medium</label>
+                <label class="radio-option"><input type="radio" name="gen-difficulty" value="hard" /> Hard</label>
+              </div>
+            </label>
+            <label class="form-label">Content Type
+              <div class="toggle-group">
+                <button type="button" class="toggle-btn active" data-type="quiz">📋 Quiz</button>
+                <button type="button" class="toggle-btn" data-type="flashcard">🃏 Flashcards</button>
+              </div>
+            </label>
+          </div>
+          <div class="form-row">
+            <label class="form-label">Number of Items: <span id="num-items-display">5</span>
+              <input id="gen-num-items" type="range" min="2" max="10" value="5" class="range-input" />
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg" id="gen-submit-btn">
+            <span id="gen-btn-text">✨ Generate with AI</span>
+          </button>
         </form>
-      </section>
 
-      <section class="panel" id="latest-response" hidden>
-        <h2>Latest tutor response</h2>
-        <div class="card-grid">
-          <article class="card"><h3>Concept summary</h3><p id="concept-summary"></p></article>
-          <article class="card"><h3>Explanation</h3><p id="explanation"></p></article>
-          <article class="card"><h3>Worked example</h3><p id="worked-example"></p></article>
-          <article class="card"><h3>Next step hint</h3><p id="next-step-hint"></p></article>
+        <div id="gen-result" class="gen-result hidden"></div>
+      </div>
+
+      <div class="info-card">
+        <h3>How it works</h3>
+        <ol class="how-list">
+          <li><span class="step">1</span> Choose a subject and enter a topic</li>
+          <li><span class="step">2</span> AI generates structured learning content via <strong>OpenRouter API</strong></li>
+          <li><span class="step">3</span> Content is saved to <strong>SQLite database</strong> as <em>pending</em></li>
+          <li><span class="step">4</span> A teacher reviews and <strong>approves</strong> it for the shared library</li>
+          <li><span class="step">5</span> Students can then <strong>practise</strong> with the approved content</li>
+        </ol>
+        <div class="data-flow">
+          <div class="flow-node client">Browser</div>
+          <div class="flow-arrow">→ JSON POST →</div>
+          <div class="flow-node server">Flask Server</div>
+          <div class="flow-arrow">→ API call →</div>
+          <div class="flow-node ai">OpenRouter AI</div>
+          <div class="flow-arrow-down">↓ response</div>
+          <div class="flow-node db" style="margin-left:6.5rem">SQLite DB</div>
         </div>
-        <article class="card full"><h3>Check understanding</h3><ul id="check-understanding"></ul></article>
-        <article class="card full"><h3>Raw JSON response</h3><pre id="output"></pre></article>
-      </section>
+      </div>
+    </div>
+  </section>
 
-      <section class="panel">
-        <div class="panel-title-row">
-          <h2>Recent community history</h2>
-          <button id="refresh-history" type="button">Refresh</button>
+  <!-- LIBRARY -->
+  <section class="panel hidden" id="panel-library">
+    <div class="panel-header">
+      <h2>Content Library</h2>
+      <p class="panel-desc" id="library-desc">Browse and filter learning content. Click <strong>Practise</strong> to start a session.</p>
+    </div>
+    <div class="filter-bar">
+      <select id="filter-subject" class="form-control filter-ctrl">
+        <option value="">All Subjects</option>
+      </select>
+      <select id="filter-type" class="form-control filter-ctrl">
+        <option value="">All Types</option>
+        <option value="quiz">📋 Quiz</option>
+        <option value="flashcard">🃏 Flashcard</option>
+      </select>
+      <select id="filter-difficulty" class="form-control filter-ctrl">
+        <option value="">All Difficulties</option>
+        <option value="easy">Easy</option>
+        <option value="medium">Medium</option>
+        <option value="hard">Hard</option>
+      </select>
+      <select id="filter-status" class="form-control filter-ctrl" id="filter-status">
+        <option value="">All Statuses</option>
+        <option value="approved">Approved</option>
+        <option value="pending">Pending</option>
+        <option value="rejected">Rejected</option>
+      </select>
+      <button class="btn btn-secondary" id="apply-filters">Filter</button>
+      <button class="btn btn-ghost" id="reset-filters">Reset</button>
+    </div>
+    <div id="library-grid" class="content-grid"></div>
+  </section>
+
+  <!-- PRACTICE -->
+  <section class="panel hidden" id="panel-practice">
+    <div id="practice-placeholder" class="placeholder-card">
+      <div class="placeholder-icon">🎯</div>
+      <h3>No active session</h3>
+      <p>Go to the <strong>Library</strong> and click <strong>Practise</strong> on a quiz or <strong>Study</strong> on a flashcard set to begin.</p>
+    </div>
+
+    <!-- Quiz mode -->
+    <div id="quiz-session" class="hidden">
+      <div class="session-header">
+        <div>
+          <h2 id="quiz-title"></h2>
+          <div class="session-meta" id="quiz-meta"></div>
         </div>
-        <div id="history-list" class="history-list"></div>
-      </section>
-    </main>
+        <button class="btn btn-ghost" id="quiz-exit">✕ Exit</button>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="quiz-progress-fill"></div>
+        </div>
+        <span class="progress-text" id="quiz-progress-text"></span>
+      </div>
 
-    <script>
-      const form = document.getElementById('tutor-form');
-      const output = document.getElementById('output');
-      const latest = document.getElementById('latest-response');
-      const historyList = document.getElementById('history-list');
+      <!-- Question display -->
+      <div id="quiz-question-card" class="question-card">
+        <p class="question-text" id="quiz-question-text"></p>
+        <div class="options-list" id="quiz-options"></div>
+        <button class="btn btn-primary" id="quiz-submit-btn" disabled>Submit Answer</button>
+      </div>
 
-      function esc(s) {
-        return (s ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-      }
+      <!-- Feedback display -->
+      <div id="quiz-feedback-card" class="feedback-card hidden">
+        <div class="feedback-result" id="quiz-feedback-result"></div>
+        <div class="feedback-explanation" id="quiz-explanation"></div>
+        <button class="btn btn-primary" id="quiz-next-btn">Next Question →</button>
+      </div>
 
-      function renderLatest(result, wholeJson) {
-        latest.hidden = false;
-        document.getElementById('concept-summary').textContent = result.concept_summary || '';
-        document.getElementById('explanation').textContent = result.explanation || '';
-        document.getElementById('worked-example').textContent = result.worked_example || '';
-        document.getElementById('next-step-hint').textContent = result.next_step_hint || '';
+      <!-- Final score -->
+      <div id="quiz-complete-card" class="complete-card hidden">
+        <div class="complete-icon" id="complete-icon"></div>
+        <h2 id="complete-title"></h2>
+        <div class="score-display" id="score-display"></div>
+        <div id="score-breakdown" class="score-breakdown"></div>
+        <div class="complete-actions">
+          <button class="btn btn-primary" id="quiz-restart-btn">🔄 Try Again</button>
+          <button class="btn btn-secondary" id="quiz-back-btn">← Back to Library</button>
+        </div>
+      </div>
+    </div>
 
-        const check = document.getElementById('check-understanding');
-        check.innerHTML = '';
-        (result.check_understanding || []).forEach((item) => {
-          const li = document.createElement('li');
-          li.textContent = item;
-          check.appendChild(li);
-        });
+    <!-- Flashcard mode -->
+    <div id="flashcard-session" class="hidden">
+      <div class="session-header">
+        <div>
+          <h2 id="fc-title"></h2>
+          <div class="session-meta" id="fc-meta"></div>
+        </div>
+        <button class="btn btn-ghost" id="fc-exit">✕ Exit</button>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="fc-progress-fill"></div>
+        </div>
+        <span class="progress-text" id="fc-progress-text"></span>
+      </div>
 
-        output.textContent = JSON.stringify(wholeJson, null, 2);
-      }
+      <div class="flashcard-area">
+        <div class="flashcard-container" id="flashcard-container" onclick="flipCard()">
+          <div class="flashcard" id="flashcard">
+            <div class="flashcard-front">
+              <div class="card-label">QUESTION</div>
+              <p id="fc-front-text"></p>
+              <div class="flip-hint">Click to reveal answer ↕</div>
+            </div>
+            <div class="flashcard-back">
+              <div class="card-label">ANSWER</div>
+              <p id="fc-back-text"></p>
+              <div id="fc-tags" class="card-tags"></div>
+            </div>
+          </div>
+        </div>
+        <div class="fc-controls">
+          <button class="btn btn-secondary" id="fc-prev-btn" disabled>← Previous</button>
+          <button class="btn btn-success" id="fc-known-btn">✓ Got it</button>
+          <button class="btn btn-warning" id="fc-unknown-btn">↩ Review again</button>
+          <button class="btn btn-secondary" id="fc-next-btn">Next →</button>
+        </div>
+        <div class="fc-summary" id="fc-summary"></div>
+      </div>
 
-      function renderHistory(items) {
-        if (!items.length) {
-          historyList.innerHTML = '<p class="muted">No saved tutor sessions yet.</p>';
-          return;
-        }
+      <div id="fc-complete-card" class="complete-card hidden">
+        <div class="complete-icon">🎉</div>
+        <h2>Session Complete!</h2>
+        <div class="score-display" id="fc-score-display"></div>
+        <div class="complete-actions">
+          <button class="btn btn-primary" id="fc-restart-btn">🔄 Study Again</button>
+          <button class="btn btn-secondary" id="fc-back-btn">← Back to Library</button>
+        </div>
+      </div>
+    </div>
+  </section>
 
-        historyList.innerHTML = items.map((item) => {
-          const checks = (item.result.check_understanding || []).map((x) => `<li>${esc(x)}</li>`).join('');
-          return `
-            <article class="history-item">
-              <h3>#${item.id} • ${esc(item.grade_level)} • ${esc(item.created_at)}</h3>
-              <p><strong>Question:</strong> ${esc(item.question)}</p>
-              <p><strong>Concept summary:</strong> ${esc(item.result.concept_summary)}</p>
-              <details>
-                <summary>Show full tutor answer + JSON</summary>
-                <p><strong>Explanation:</strong> ${esc(item.result.explanation)}</p>
-                <p><strong>Worked example:</strong> ${esc(item.result.worked_example)}</p>
-                <p><strong>Next step hint:</strong> ${esc(item.result.next_step_hint)}</p>
-                <p><strong>Check understanding:</strong></p>
-                <ul>${checks}</ul>
-                <pre>${esc(JSON.stringify(item.raw_json, null, 2))}</pre>
-              </details>
-            </article>
-          `;
-        }).join('');
-      }
+  <!-- PROGRESS -->
+  <section class="panel hidden" id="panel-progress">
+    <div class="panel-header">
+      <h2>My Progress</h2>
+      <p class="panel-desc">Track your learning activity and accuracy across subjects.</p>
+    </div>
+    <div id="progress-content">
+      <div class="stats-grid" id="progress-stats"></div>
+      <div class="two-col">
+        <div>
+          <h3>Subject Breakdown</h3>
+          <div id="subject-breakdown"></div>
+        </div>
+        <div>
+          <h3>Recent Activity</h3>
+          <div id="recent-activity"></div>
+        </div>
+      </div>
+    </div>
+  </section>
 
-      async function loadHistory() {
-        const res = await fetch('/api/history');
-        const data = await res.json();
-        renderHistory(data.sessions || []);
-      }
+  <!-- REVIEW QUEUE (teacher) -->
+  <section class="panel hidden" id="panel-review">
+    <div class="panel-header">
+      <h2>Review Queue</h2>
+      <p class="panel-desc">Content submitted by students awaiting your approval. Approve to publish to the shared library, or reject with guidance.</p>
+    </div>
+    <div id="review-queue" class="content-grid"></div>
+  </section>
 
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        output.textContent = 'Loading...';
+  <!-- STATS (teacher/admin) -->
+  <section class="panel hidden" id="panel-stats">
+    <div class="panel-header">
+      <h2>System Dashboard</h2>
+      <p class="panel-desc">Overview of content, usage, and student engagement.</p>
+    </div>
+    <div class="stats-grid" id="dash-stats"></div>
+    <div class="two-col" style="margin-top:1.5rem">
+      <div>
+        <h3>Content by Status</h3>
+        <div id="status-chart" class="bar-chart"></div>
+        <h3 style="margin-top:1.5rem">Content by Type</h3>
+        <div id="type-chart" class="bar-chart"></div>
+      </div>
+      <div>
+        <h3>Content by Subject</h3>
+        <div id="subject-chart" class="bar-chart"></div>
+        <h3 style="margin-top:1.5rem">Top Students</h3>
+        <div id="top-students"></div>
+      </div>
+    </div>
+  </section>
 
-        const fd = new FormData(form);
-        const res = await fetch('/api/tutor', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            grade_level: fd.get('grade_level'),
-            question: fd.get('question')
-          })
-        });
+  <!-- USERS (admin) -->
+  <section class="panel hidden" id="panel-users">
+    <div class="panel-header">
+      <h2>User Management</h2>
+      <p class="panel-desc">View all users and change their roles. Role changes take effect immediately and control what features each user can access.</p>
+    </div>
+    <div class="data-table-wrap">
+      <table class="data-table" id="users-table">
+        <thead>
+          <tr><th>#</th><th>Name</th><th>Current Role</th><th>Change Role</th><th>Action</th></tr>
+        </thead>
+        <tbody id="users-tbody"></tbody>
+      </table>
+    </div>
+    <div class="info-card" style="margin-top:1rem">
+      <h3>Role Permissions</h3>
+      <table class="data-table">
+        <thead><tr><th>Permission</th><th>Student</th><th>Teacher</th><th>Admin</th></tr></thead>
+        <tbody>
+          <tr><td>Generate content</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>View approved content</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>View own pending content</td><td>✅</td><td>✅</td><td>✅</td></tr>
+          <tr><td>View all pending/rejected</td><td>❌</td><td>✅</td><td>✅</td></tr>
+          <tr><td>Approve / reject content</td><td>❌</td><td>✅</td><td>✅</td></tr>
+          <tr><td>View system stats</td><td>❌</td><td>✅</td><td>✅</td></tr>
+          <tr><td>Manage users &amp; roles</td><td>❌</td><td>❌</td><td>✅</td></tr>
+          <tr><td>Manage subjects</td><td>❌</td><td>❌</td><td>✅</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-        const data = await res.json();
-        if (!res.ok) {
-          latest.hidden = false;
-          output.textContent = JSON.stringify(data, null, 2);
-          return;
-        }
+  <!-- SUBJECTS (admin) -->
+  <section class="panel hidden" id="panel-subjects">
+    <div class="panel-header">
+      <h2>Subject Management</h2>
+      <p class="panel-desc">Configure which subjects are available for content generation. Inactive subjects are hidden from the generate form.</p>
+    </div>
+    <div class="two-col">
+      <div>
+        <h3>Current Subjects</h3>
+        <div id="subjects-list"></div>
+      </div>
+      <div>
+        <h3>Add New Subject</h3>
+        <form id="add-subject-form" class="form-card">
+          <label class="form-label">Subject Name
+            <input id="new-subject-name" type="text" class="form-control" placeholder="e.g. Physics" required />
+          </label>
+          <button type="submit" class="btn btn-primary">Add Subject</button>
+        </form>
+        <div class="info-card" style="margin-top:1rem">
+          <h3>Database Schema</h3>
+          <pre class="schema-pre">subjects (
+  id        INTEGER PK
+  name      TEXT UNIQUE
+  active    INTEGER
+)
 
-        renderLatest(data.result, data);
-        await loadHistory();
-      });
+content_items (
+  id           INTEGER PK
+  created_by   → users.id
+  subject_id   → subjects.id
+  topic        TEXT
+  difficulty   easy|medium|hard
+  content_type quiz|flashcard
+  status       pending|approved|rejected
+  reviewed_by  → users.id
+  created_at   TEXT
+  raw_json     TEXT
+)
 
-      document.getElementById('refresh-history').addEventListener('click', loadHistory);
-      loadHistory();
-    </script>
-  </body>
+quiz_questions (
+  id             INTEGER PK
+  content_id     → content_items.id
+  question       TEXT
+  options_json   TEXT (JSON)
+  explanation    TEXT
+)
+
+user_responses (
+  id              INTEGER PK
+  user_id         → users.id
+  question_id     → quiz_questions.id
+  selected_option TEXT
+  is_correct      INTEGER
+  answered_at     TEXT
+)</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- PREVIEW MODAL -->
+<div class="modal-overlay hidden" id="preview-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title">Content Preview</h3>
+      <button class="btn btn-ghost" id="modal-close">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="toast"></div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+const S = {
+  userId: 1,
+  role: 'student',
+  userName: 'Hamish',
+  subjects: [],
+  genContentType: 'quiz',
+  practiceType: null,   // 'quiz' | 'flashcard'
+  quiz: {
+    contentId: null, title: '', questions: [],
+    currentQ: 0, score: 0, results: [], answerSubmitted: false
+  },
+  flashcard: {
+    contentId: null, title: '', cards: [],
+    current: 0, flipped: false, known: new Set(), review: new Set()
+  }
+};
+
+// ─── Tab definitions per role ─────────────────────────────────────────────────
+const TABS = {
+  student: [
+    { id: 'generate', label: '✨ Generate',  panel: 'panel-generate'  },
+    { id: 'library',  label: '📚 Library',   panel: 'panel-library'   },
+    { id: 'practice', label: '🎯 Practice',  panel: 'panel-practice'  },
+    { id: 'progress', label: '📊 Progress',  panel: 'panel-progress'  },
+  ],
+  teacher: [
+    { id: 'review',   label: '🔍 Review Queue', panel: 'panel-review'   },
+    { id: 'library',  label: '📚 Library',      panel: 'panel-library'  },
+    { id: 'generate', label: '✨ Generate',     panel: 'panel-generate' },
+    { id: 'stats',    label: '📈 Dashboard',    panel: 'panel-stats'    },
+  ],
+  admin: [
+    { id: 'users',    label: '👥 Users',       panel: 'panel-users'    },
+    { id: 'subjects', label: '🗂 Subjects',    panel: 'panel-subjects' },
+    { id: 'library',  label: '📚 Library',     panel: 'panel-library'  },
+    { id: 'stats',    label: '📈 Dashboard',   panel: 'panel-stats'    },
+  ]
+};
+
+const ROLE_DESCS = {
+  student: 'Generate content, practise questions, track your progress',
+  teacher: 'Review pending content, approve resources, monitor engagement',
+  admin:   'Manage users & roles, configure subjects, view system stats'
+};
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+function esc(s) {
+  return (s ?? '').toString()
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function fmt(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  return d.toLocaleString('en-AU', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+
+function statusBadge(status) {
+  return `<span class="badge ${status}">${status}</span>`;
+}
+function diffBadge(d) {
+  return `<span class="badge diff-${d}">${d}</span>`;
+}
+function typeBadge(t) {
+  return `<span class="badge type-${t}">${t === 'quiz' ? '📋 Quiz' : '🃏 Flashcard'}</span>`;
+}
+
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type} show`;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.className = 'toast', 2800);
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  return { ok: res.ok, status: res.status, data };
+}
+
+// ─── Role / User switching ────────────────────────────────────────────────────
+document.querySelectorAll('.role-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const uid  = parseInt(btn.dataset.userId);
+    const role = btn.dataset.role;
+    const name = btn.dataset.name;
+    switchUser(uid, role, name);
+  });
+});
+
+function switchUser(uid, role, name) {
+  S.userId   = uid;
+  S.role     = role;
+  S.userName = name;
+
+  document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`.role-btn[data-user-id="${uid}"]`).classList.add('active');
+
+  document.getElementById('context-user').textContent  = `${name} · ${role.charAt(0).toUpperCase()+role.slice(1)}`;
+  document.getElementById('context-desc').textContent  = ROLE_DESCS[role];
+  document.getElementById('context-badge').textContent = role.toUpperCase();
+  document.getElementById('context-bar').className     = `context-bar role-${role}`;
+
+  buildTabs(role);
+
+  // Reset practice state on switch
+  exitPractice();
+
+  // Populate filter-status visibility
+  const fs = document.getElementById('filter-status');
+  fs.style.display = role === 'student' ? 'none' : '';
+}
+
+function buildTabs(role) {
+  const nav    = document.getElementById('tab-nav');
+  const tabs   = TABS[role];
+  nav.innerHTML = tabs.map(t =>
+    `<button class="tab-btn" data-panel="${t.panel}" data-tab-id="${t.id}">${t.label}</button>`
+  ).join('');
+
+  nav.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => activateTab(btn));
+  });
+
+  activateTab(nav.querySelector('.tab-btn'));
+}
+
+function activateTab(btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
+  document.getElementById(btn.dataset.panel).classList.remove('hidden');
+
+  const tabId = btn.dataset.tabId;
+  if (tabId === 'library')  loadLibrary();
+  if (tabId === 'review')   loadReview();
+  if (tabId === 'progress') loadProgress();
+  if (tabId === 'stats')    loadStats();
+  if (tabId === 'users')    loadUsers();
+  if (tabId === 'subjects') loadSubjects();
+}
+
+function goToTab(tabId) {
+  const btn = document.querySelector(`.tab-btn[data-tab-id="${tabId}"]`);
+  if (btn) activateTab(btn);
+}
+
+// ─── Subjects ─────────────────────────────────────────────────────────────────
+async function fetchSubjects() {
+  const { data } = await api('GET', '/api/subjects');
+  S.subjects = data;
+  populateSubjectSelects();
+}
+
+function populateSubjectSelects() {
+  ['gen-subject','filter-subject'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const cur = el.value;
+    el.innerHTML = `<option value="">— ${id.startsWith('gen') ? 'Any subject' : 'All Subjects'} —</option>`;
+    S.subjects.filter(s => s.active || id.startsWith('filter')).forEach(s => {
+      el.innerHTML += `<option value="${s.id}" ${cur==s.id?'selected':''}>${esc(s.name)}${!s.active?' (inactive)':''}</option>`;
+    });
+  });
+}
+
+// ─── Generate ────────────────────────────────────────────────────────────────
+document.querySelectorAll('.toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    S.genContentType = btn.dataset.type;
+  });
+});
+
+document.getElementById('gen-num-items').addEventListener('input', e => {
+  document.getElementById('num-items-display').textContent = e.target.value;
+});
+
+document.getElementById('generate-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const topic = document.getElementById('gen-topic').value.trim();
+  if (!topic) { showToast('Please enter a topic', 'error'); return; }
+
+  const difficulty = document.querySelector('input[name="gen-difficulty"]:checked')?.value || 'medium';
+  const subjectId  = document.getElementById('gen-subject').value || null;
+  const numItems   = parseInt(document.getElementById('gen-num-items').value);
+
+  const btn  = document.getElementById('gen-submit-btn');
+  const txt  = document.getElementById('gen-btn-text');
+  btn.disabled = true;
+  txt.textContent = '⏳ Generating…';
+
+  const result = document.getElementById('gen-result');
+  result.className = 'gen-result';
+  result.innerHTML = `<div class="loading-card"><div class="spinner"></div><p>Calling OpenRouter AI API…<br><small>Structuring response as JSON and saving to database…</small></p></div>`;
+
+  const { ok, data } = await api('POST', '/api/generate', {
+    user_id: S.userId,
+    topic, difficulty,
+    subject_id: subjectId ? parseInt(subjectId) : null,
+    content_type: S.genContentType,
+    num_items: numItems
+  });
+
+  btn.disabled = false;
+  txt.textContent = '✨ Generate with AI';
+
+  if (!ok) {
+    result.innerHTML = `<div class="alert error"><strong>Error:</strong> ${esc(data.error)}<br><small>${esc(data.details||'')}</small></div>`;
+    return;
+  }
+
+  const preview = data.preview;
+  const items   = S.genContentType === 'quiz'
+    ? (preview.questions||[])
+    : (preview.flashcards||[]);
+
+  let previewHTML = `
+    <div class="alert success">
+      ✅ <strong>${esc(data.message)}</strong><br>
+      <small>Content ID: #${data.content_id} · ${data.item_count} ${S.genContentType === 'quiz' ? 'questions' : 'cards'}</small>
+    </div>
+    <div class="preview-section">
+      <h4>Preview (first ${Math.min(2,items.length)} items)</h4>`;
+
+  items.slice(0,2).forEach((item, i) => {
+    if (S.genContentType === 'quiz') {
+      previewHTML += `<div class="preview-item">
+        <strong>Q${i+1}:</strong> ${esc(item.question)}<br>
+        ${(item.answers||[]).map(a=>`<span class="${a.correct?'correct-ans':''}">  ${a.id}) ${esc(a.text)}${a.correct?' ✓':''}</span>`).join('<br>')}
+        <div class="explanation-preview">💡 ${esc(item.explanation)}</div>
+      </div>`;
+    } else {
+      previewHTML += `<div class="preview-item">
+        <strong>Front:</strong> ${esc(item.front)}<br>
+        <strong>Back:</strong> ${esc(item.back)}
+      </div>`;
+    }
+  });
+  previewHTML += `</div>`;
+
+  if (S.role !== 'student') {
+    previewHTML += `<button class="btn btn-success" onclick="approveFromGen(${data.content_id})">✓ Approve Now</button>`;
+  }
+
+  result.innerHTML = previewHTML;
+  showToast('Content generated and saved!', 'success');
+});
+
+async function approveFromGen(contentId) {
+  const { ok } = await api('PATCH', `/api/content/${contentId}/status`, {
+    user_id: S.userId, status: 'approved'
+  });
+  if (ok) showToast('Content approved!', 'success');
+}
+
+// ─── Library ──────────────────────────────────────────────────────────────────
+document.getElementById('apply-filters').addEventListener('click', loadLibrary);
+document.getElementById('reset-filters').addEventListener('click', () => {
+  ['filter-subject','filter-type','filter-difficulty','filter-status'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  loadLibrary();
+});
+
+async function loadLibrary() {
+  const params = new URLSearchParams({ user_id: S.userId });
+  const subj = document.getElementById('filter-subject').value;
+  const type = document.getElementById('filter-type').value;
+  const diff = document.getElementById('filter-difficulty').value;
+  const stat = document.getElementById('filter-status').value;
+  if (subj) params.append('subject_id', subj);
+  if (type) params.append('type', type);
+  if (diff) params.append('difficulty', diff);
+  if (stat) params.append('status', stat);
+
+  const { ok, data } = await api('GET', `/api/content?${params}`);
+  const grid = document.getElementById('library-grid');
+
+  if (!ok || !data.length) {
+    grid.innerHTML = `<div class="placeholder-card"><div class="placeholder-icon">📭</div><p>No content found. Try adjusting filters or generate some!</p></div>`;
+    return;
+  }
+
+  grid.innerHTML = data.map(item => renderContentCard(item)).join('');
+}
+
+function renderContentCard(item) {
+  const canReview = (S.role === 'teacher' || S.role === 'admin') && item.status === 'pending';
+  const canPractise = item.status === 'approved' || (item.created_by === S.userId);
+  const isOwn = item.created_by === S.userId;
+
+  return `<div class="content-card" data-id="${item.id}">
+    <div class="card-badges">
+      ${statusBadge(item.status)}
+      ${typeBadge(item.content_type)}
+      ${diffBadge(item.difficulty)}
+      ${isOwn ? '<span class="badge mine">mine</span>' : ''}
+    </div>
+    <h3 class="card-topic">${esc(item.topic)}</h3>
+    <div class="card-meta">
+      ${item.subject_name ? `<span>📚 ${esc(item.subject_name)}</span>` : ''}
+      <span>👤 ${esc(item.creator_name)}</span>
+      <span>🗓 ${fmt(item.created_at)}</span>
+      <span>${item.content_type === 'quiz' ? `❓ ${item.item_count} questions` : `🃏 ${item.item_count} cards`}</span>
+    </div>
+    ${item.reviewer_name ? `<div class="card-reviewed">Reviewed by ${esc(item.reviewer_name)} · ${fmt(item.reviewed_at)}</div>` : ''}
+    <div class="card-actions">
+      <button class="btn btn-secondary btn-sm" onclick="previewContent(${item.id})">👁 Preview</button>
+      ${canPractise ? `<button class="btn btn-primary btn-sm" onclick="startPractice(${item.id}, '${item.content_type}', '${esc(item.topic)}')">
+        ${item.content_type === 'quiz' ? '🎯 Practise' : '🃏 Study'}
+      </button>` : ''}
+      ${canReview ? `
+        <button class="btn btn-success btn-sm" onclick="reviewContent(${item.id}, 'approved')">✓ Approve</button>
+        <button class="btn btn-danger btn-sm" onclick="reviewContent(${item.id}, 'rejected')">✗ Reject</button>
+      ` : ''}
+    </div>
+  </div>`;
+}
+
+async function reviewContent(id, status, fromReview=false) {
+  const { ok, data } = await api('PATCH', `/api/content/${id}/status`, {
+    user_id: S.userId, status
+  });
+  if (ok) {
+    showToast(`Content ${status}!`, status === 'approved' ? 'success' : 'warning');
+    if (fromReview) loadReview(); else loadLibrary();
+  } else {
+    showToast(data.error || 'Error', 'error');
+  }
+}
+
+async function previewContent(id) {
+  const { ok, data } = await api('GET', `/api/content/${id}?user_id=${S.userId}`);
+  if (!ok) { showToast(data.error || 'Error', 'error'); return; }
+
+  const modal = document.getElementById('preview-modal');
+  document.getElementById('modal-title').textContent = data.topic;
+
+  let body = `<div class="modal-meta">
+    ${statusBadge(data.status)} ${typeBadge(data.content_type)} ${diffBadge(data.difficulty)}
+    ${data.subject_name ? `<span>📚 ${esc(data.subject_name)}</span>` : ''}
+    <span>👤 ${esc(data.creator_name)}</span>
+  </div>`;
+
+  if (data.content_type === 'quiz') {
+    body += (data.questions||[]).map((q,i) => `
+      <div class="preview-item">
+        <strong>Q${i+1}:</strong> ${esc(q.question)}<br>
+        ${(q.options||[]).map(a=>`<span class="${a.correct?'correct-ans':''}">  ${a.id}) ${esc(a.text)}${a.correct?' ✓':''}</span>`).join('<br>')}
+        <div class="explanation-preview">💡 ${esc(q.explanation)}</div>
+      </div>`).join('');
+  } else {
+    body += (data.flashcards||[]).map((fc,i) => `
+      <div class="preview-item">
+        <span class="badge type-${fc.card_type}">${fc.card_type}</span><br>
+        <strong>Front:</strong> ${esc(fc.front)}<br>
+        <strong>Back:</strong> ${esc(fc.back)}<br>
+        <small>${(fc.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join(' ')}</small>
+      </div>`).join('');
+  }
+
+  document.getElementById('modal-body').innerHTML = body;
+
+  const footer = document.getElementById('modal-footer');
+  const canReview = (S.role === 'teacher' || S.role === 'admin') && data.status === 'pending';
+  footer.innerHTML = canReview ? `
+    <button class="btn btn-success" onclick="reviewContent(${id},'approved'); closeModal()">✓ Approve</button>
+    <button class="btn btn-danger"  onclick="reviewContent(${id},'rejected'); closeModal()">✗ Reject</button>
+  ` : '';
+
+  modal.classList.remove('hidden');
+}
+
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('preview-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+function closeModal() {
+  document.getElementById('preview-modal').classList.add('hidden');
+}
+
+// ─── Practice ─────────────────────────────────────────────────────────────────
+async function startPractice(contentId, type, title) {
+  const { ok, data } = await api('GET', `/api/content/${contentId}?user_id=${S.userId}`);
+  if (!ok) { showToast(data.error || 'Error loading content', 'error'); return; }
+
+  goToTab('practice');
+  document.getElementById('practice-placeholder').classList.add('hidden');
+
+  if (type === 'quiz') {
+    startQuiz(data);
+  } else {
+    startFlashcards(data);
+  }
+}
+
+function exitPractice() {
+  document.getElementById('practice-placeholder').classList.remove('hidden');
+  document.getElementById('quiz-session').classList.add('hidden');
+  document.getElementById('flashcard-session').classList.add('hidden');
+  S.practiceType = null;
+}
+
+// ── Quiz ──────────────────────────────────────────────────────────────────────
+function startQuiz(data) {
+  S.practiceType = 'quiz';
+  S.quiz = {
+    contentId: data.id,
+    title: data.topic,
+    questions: data.questions || [],
+    currentQ: 0, score: 0, results: [], answerSubmitted: false
+  };
+
+  document.getElementById('quiz-session').classList.remove('hidden');
+  document.getElementById('flashcard-session').classList.add('hidden');
+  document.getElementById('quiz-complete-card').classList.add('hidden');
+  document.getElementById('quiz-title').textContent = data.topic;
+  document.getElementById('quiz-meta').innerHTML =
+    `${typeBadge('quiz')} ${diffBadge(data.difficulty)} ${data.subject_name ? `<span>📚 ${esc(data.subject_name)}</span>` : ''}`;
+
+  renderQuizQuestion();
+}
+
+function renderQuizQuestion() {
+  const { questions, currentQ } = S.quiz;
+  if (currentQ >= questions.length) { showQuizComplete(); return; }
+
+  const q = questions[currentQ];
+  const pct = Math.round((currentQ / questions.length) * 100);
+
+  document.getElementById('quiz-progress-fill').style.width = pct + '%';
+  document.getElementById('quiz-progress-text').textContent = `${currentQ + 1} / ${questions.length}`;
+  document.getElementById('quiz-question-text').textContent = q.question;
+
+  const optsList = document.getElementById('quiz-options');
+  optsList.innerHTML = q.options.map(opt => `
+    <label class="option-label" data-opt="${opt.id}">
+      <input type="radio" name="quiz-opt" value="${opt.id}" />
+      <span class="option-id">${opt.id.toUpperCase()}</span>
+      <span class="option-text">${esc(opt.text)}</span>
+    </label>
+  `).join('');
+
+  optsList.querySelectorAll('input[type=radio]').forEach(r => {
+    r.addEventListener('change', () => {
+      document.getElementById('quiz-submit-btn').disabled = false;
+      optsList.querySelectorAll('.option-label').forEach(l => l.classList.remove('selected'));
+      r.closest('.option-label').classList.add('selected');
+    });
+  });
+
+  document.getElementById('quiz-question-card').classList.remove('hidden');
+  document.getElementById('quiz-feedback-card').classList.add('hidden');
+  document.getElementById('quiz-submit-btn').disabled = true;
+  S.quiz.answerSubmitted = false;
+}
+
+document.getElementById('quiz-submit-btn').addEventListener('click', async () => {
+  if (S.quiz.answerSubmitted) return;
+  const selected = document.querySelector('input[name="quiz-opt"]:checked');
+  if (!selected) return;
+
+  S.quiz.answerSubmitted = true;
+  document.getElementById('quiz-submit-btn').disabled = true;
+
+  const q = S.quiz.questions[S.quiz.currentQ];
+  const { ok, data } = await api('POST', '/api/answer', {
+    user_id: S.userId,
+    question_id: q.id,
+    selected_option: selected.value
+  });
+
+  if (!ok) { showToast('Error submitting answer', 'error'); return; }
+
+  if (data.is_correct) S.quiz.score++;
+  S.quiz.results.push({ question: q.question, is_correct: data.is_correct,
+    selected: selected.value, correct: data.correct_option });
+
+  // Highlight options
+  document.querySelectorAll('.option-label').forEach(l => {
+    const v = l.dataset.opt;
+    if (v === data.correct_option) l.classList.add('correct');
+    else if (v === selected.value && !data.is_correct) l.classList.add('incorrect');
+  });
+
+  const fb = document.getElementById('quiz-feedback-card');
+  document.getElementById('quiz-feedback-result').innerHTML = data.is_correct
+    ? `<span class="feedback-correct">✅ Correct!</span>`
+    : `<span class="feedback-incorrect">❌ Incorrect. The correct answer was <strong>${data.correct_option.toUpperCase()}) ${esc(data.correct_text)}</strong></span>`;
+  document.getElementById('quiz-explanation').innerHTML = `<strong>Explanation:</strong> ${esc(data.explanation)}`;
+
+  document.getElementById('quiz-question-card').classList.add('hidden');
+  fb.classList.remove('hidden');
+
+  const isLast = S.quiz.currentQ + 1 >= S.quiz.questions.length;
+  document.getElementById('quiz-next-btn').textContent = isLast ? 'See Results 🏆' : 'Next Question →';
+});
+
+document.getElementById('quiz-next-btn').addEventListener('click', () => {
+  S.quiz.currentQ++;
+  renderQuizQuestion();
+});
+
+document.getElementById('quiz-exit').addEventListener('click', exitPractice);
+document.getElementById('quiz-back-btn').addEventListener('click', () => { exitPractice(); goToTab('library'); });
+document.getElementById('quiz-restart-btn').addEventListener('click', () => startQuiz({ id: S.quiz.contentId, topic: S.quiz.title, questions: S.quiz.questions, difficulty: '' }));
+
+function showQuizComplete() {
+  document.getElementById('quiz-question-card').classList.add('hidden');
+  document.getElementById('quiz-feedback-card').classList.add('hidden');
+  document.getElementById('quiz-complete-card').classList.remove('hidden');
+
+  const total = S.quiz.questions.length;
+  const score = S.quiz.score;
+  const pct   = Math.round((score / total) * 100);
+
+  document.getElementById('quiz-progress-fill').style.width = '100%';
+  document.getElementById('quiz-progress-text').textContent = `${total} / ${total}`;
+
+  const icon = pct >= 80 ? '🏆' : pct >= 60 ? '👍' : '📚';
+  document.getElementById('complete-icon').textContent = icon;
+  document.getElementById('complete-title').textContent = pct >= 80 ? 'Excellent work!' : pct >= 60 ? 'Good effort!' : 'Keep practising!';
+  document.getElementById('score-display').innerHTML =
+    `<span class="score-num">${score}/${total}</span> <span class="score-pct">${pct}%</span>`;
+
+  document.getElementById('score-breakdown').innerHTML = S.quiz.results.map((r,i) =>
+    `<div class="breakdown-item ${r.is_correct?'correct':'incorrect'}">
+       <span class="breakdown-icon">${r.is_correct?'✅':'❌'}</span>
+       <span class="breakdown-text">Q${i+1}: ${esc(r.question.substring(0,60))}${r.question.length>60?'…':''}</span>
+     </div>`
+  ).join('');
+}
+
+// ── Flashcards ────────────────────────────────────────────────────────────────
+function startFlashcards(data) {
+  S.practiceType = 'flashcard';
+  S.flashcard = {
+    contentId: data.id, title: data.topic,
+    cards: data.flashcards || [],
+    current: 0, flipped: false,
+    known: new Set(), review: new Set()
+  };
+
+  document.getElementById('flashcard-session').classList.remove('hidden');
+  document.getElementById('quiz-session').classList.add('hidden');
+  document.getElementById('fc-complete-card').classList.add('hidden');
+  document.getElementById('fc-title').textContent = data.topic;
+  document.getElementById('fc-meta').innerHTML =
+    `${typeBadge('flashcard')} ${diffBadge(data.difficulty)}`;
+
+  renderFlashcard();
+}
+
+function renderFlashcard() {
+  const { cards, current, known, review } = S.flashcard;
+  if (!cards.length) return;
+
+  const card = cards[current];
+  const pct  = Math.round((current / cards.length) * 100);
+
+  document.getElementById('fc-progress-fill').style.width = pct + '%';
+  document.getElementById('fc-progress-text').textContent = `${current + 1} / ${cards.length}`;
+  document.getElementById('fc-front-text').textContent = card.front;
+  document.getElementById('fc-back-text').textContent  = card.back;
+  document.getElementById('fc-tags').innerHTML = (card.tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join(' ');
+
+  // Reset flip
+  S.flashcard.flipped = false;
+  document.getElementById('flashcard').classList.remove('flipped');
+
+  document.getElementById('fc-prev-btn').disabled = current === 0;
+  document.getElementById('fc-next-btn').disabled = current === cards.length - 1;
+
+  const summary = `<span class="fc-stat known">✓ Known: ${known.size}</span>
+    <span class="fc-stat review">↩ Review: ${review.size}</span>
+    <span class="fc-stat remaining">• Remaining: ${cards.length - known.size - review.size}</span>`;
+  document.getElementById('fc-summary').innerHTML = summary;
+}
+
+function flipCard() {
+  S.flashcard.flipped = !S.flashcard.flipped;
+  document.getElementById('flashcard').classList.toggle('flipped', S.flashcard.flipped);
+}
+
+document.getElementById('fc-prev-btn').addEventListener('click', () => {
+  if (S.flashcard.current > 0) { S.flashcard.current--; renderFlashcard(); }
+});
+document.getElementById('fc-next-btn').addEventListener('click', () => {
+  if (S.flashcard.current < S.flashcard.cards.length - 1) { S.flashcard.current++; renderFlashcard(); }
+});
+document.getElementById('fc-known-btn').addEventListener('click', () => {
+  S.flashcard.known.add(S.flashcard.current);
+  S.flashcard.review.delete(S.flashcard.current);
+  if (S.flashcard.known.size + S.flashcard.review.size >= S.flashcard.cards.length) {
+    showFcComplete();
+  } else if (S.flashcard.current < S.flashcard.cards.length - 1) {
+    S.flashcard.current++; renderFlashcard();
+  } else {
+    showFcComplete();
+  }
+});
+document.getElementById('fc-unknown-btn').addEventListener('click', () => {
+  S.flashcard.review.add(S.flashcard.current);
+  S.flashcard.known.delete(S.flashcard.current);
+  if (S.flashcard.current < S.flashcard.cards.length - 1) {
+    S.flashcard.current++; renderFlashcard();
+  }
+});
+document.getElementById('fc-exit').addEventListener('click', exitPractice);
+document.getElementById('fc-back-btn').addEventListener('click', () => { exitPractice(); goToTab('library'); });
+document.getElementById('fc-restart-btn').addEventListener('click', () => startFlashcards({ id: S.flashcard.contentId, topic: S.flashcard.title, flashcards: S.flashcard.cards, difficulty: '' }));
+
+function showFcComplete() {
+  const total = S.flashcard.cards.length;
+  const known = S.flashcard.known.size;
+  document.getElementById('fc-complete-card').classList.remove('hidden');
+  document.getElementById('fc-score-display').innerHTML =
+    `<span class="score-num">${known}/${total}</span> cards marked as known`;
+  document.getElementById('fc-progress-fill').style.width = '100%';
+}
+
+// ─── Progress ─────────────────────────────────────────────────────────────────
+async function loadProgress() {
+  const { ok, data } = await api('GET', `/api/progress?user_id=${S.userId}`);
+  if (!ok) return;
+
+  document.getElementById('progress-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-num">${data.accuracy}%</div><div class="stat-label">Accuracy</div></div>
+    <div class="stat-card"><div class="stat-num">${data.total_attempts}</div><div class="stat-label">Total Attempts</div></div>
+    <div class="stat-card"><div class="stat-num">${data.unique_questions}</div><div class="stat-label">Questions Answered</div></div>
+    <div class="stat-card"><div class="stat-num">${data.content_generated}</div><div class="stat-label">Content Generated</div></div>
+  `;
+
+  const breakdown = document.getElementById('subject-breakdown');
+  if (!data.subject_progress.length) {
+    breakdown.innerHTML = '<p class="muted">No quiz attempts yet. Try practising some questions!</p>';
+  } else {
+    breakdown.innerHTML = data.subject_progress.map(s => {
+      const pct = s.attempts ? Math.round(s.correct_count / s.attempts * 100) : 0;
+      return `<div class="subject-row">
+        <span class="subject-name">${esc(s.subject)}</span>
+        <div class="mini-bar-track"><div class="mini-bar-fill" style="width:${pct}%"></div></div>
+        <span class="subject-pct">${pct}% (${s.correct_count}/${s.attempts})</span>
+      </div>`;
+    }).join('');
+  }
+
+  const activity = document.getElementById('recent-activity');
+  if (!data.recent_activity.length) {
+    activity.innerHTML = '<p class="muted">No recent activity.</p>';
+  } else {
+    activity.innerHTML = data.recent_activity.map(a =>
+      `<div class="activity-item ${a.is_correct?'correct':'incorrect'}">
+         <span class="activity-icon">${a.is_correct?'✅':'❌'}</span>
+         <div class="activity-text">
+           <span class="activity-q">${esc(a.question.substring(0,60))}${a.question.length>60?'…':''}</span>
+           <span class="activity-meta">${esc(a.topic)} · ${fmt(a.answered_at)}</span>
+         </div>
+       </div>`
+    ).join('');
+  }
+}
+
+// ─── Review Queue ─────────────────────────────────────────────────────────────
+async function loadReview() {
+  const { ok, data } = await api('GET', `/api/content?user_id=${S.userId}&status=pending`);
+  const queue = document.getElementById('review-queue');
+
+  if (!ok || !data.length) {
+    queue.innerHTML = `<div class="placeholder-card"><div class="placeholder-icon">✅</div><h3>Queue is clear!</h3><p>No pending content to review.</p></div>`;
+    return;
+  }
+
+  queue.innerHTML = data.map(item => `
+    <div class="content-card">
+      <div class="card-badges">
+        ${statusBadge(item.status)} ${typeBadge(item.content_type)} ${diffBadge(item.difficulty)}
+      </div>
+      <h3 class="card-topic">${esc(item.topic)}</h3>
+      <div class="card-meta">
+        ${item.subject_name ? `<span>📚 ${esc(item.subject_name)}</span>` : ''}
+        <span>👤 Submitted by ${esc(item.creator_name)}</span>
+        <span>🗓 ${fmt(item.created_at)}</span>
+        <span>${item.content_type==='quiz' ? `❓ ${item.item_count} questions` : `🃏 ${item.item_count} cards`}</span>
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-secondary btn-sm" onclick="previewContent(${item.id})">👁 Preview</button>
+        <button class="btn btn-success btn-sm" onclick="reviewContent(${item.id},'approved',true)">✓ Approve</button>
+        <button class="btn btn-danger btn-sm" onclick="reviewContent(${item.id},'rejected',true)">✗ Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ─── Stats dashboard ──────────────────────────────────────────────────────────
+async function loadStats() {
+  const { ok, data } = await api('GET', `/api/stats?user_id=${S.userId}`);
+  if (!ok) { showToast(data.error||'Access denied','error'); return; }
+
+  document.getElementById('dash-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-num">${data.total_users}</div><div class="stat-label">Total Users</div></div>
+    <div class="stat-card"><div class="stat-num">${data.total_content}</div><div class="stat-label">Content Items</div></div>
+    <div class="stat-card"><div class="stat-num">${data.total_responses}</div><div class="stat-label">Quiz Responses</div></div>
+    <div class="stat-card"><div class="stat-num">${(data.content_by_status.find(s=>s.status==='pending')||{count:0}).count}</div><div class="stat-label">Pending Review</div></div>
+  `;
+
+  function barChart(containerId, rows, labelKey, countKey) {
+    const el   = document.getElementById(containerId);
+    const max  = Math.max(...rows.map(r=>r[countKey]), 1);
+    el.innerHTML = rows.map(r => {
+      const pct = Math.round(r[countKey]/max*100);
+      return `<div class="bar-row">
+        <span class="bar-label">${esc(r[labelKey])}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+        <span class="bar-count">${r[countKey]}</span>
+      </div>`;
+    }).join('');
+  }
+
+  barChart('status-chart', data.content_by_status, 'status', 'count');
+  barChart('type-chart',   data.content_by_type,   'content_type', 'count');
+  barChart('subject-chart',data.content_by_subject, 'subject', 'count');
+
+  const ts = document.getElementById('top-students');
+  if (!data.top_students.length) {
+    ts.innerHTML = '<p class="muted">No quiz activity yet.</p>';
+  } else {
+    ts.innerHTML = `<table class="data-table"><thead><tr><th>Student</th><th>Attempts</th><th>Correct</th><th>Accuracy</th></tr></thead><tbody>` +
+      data.top_students.map(s => {
+        const pct = s.attempts ? Math.round(s.correct/s.attempts*100) : 0;
+        return `<tr><td>${esc(s.name)}</td><td>${s.attempts}</td><td>${s.correct}</td><td>${pct}%</td></tr>`;
+      }).join('') + '</tbody></table>';
+  }
+}
+
+// ─── Users (admin) ────────────────────────────────────────────────────────────
+async function loadUsers() {
+  const { ok, data } = await api('GET', `/api/users?user_id=${S.userId}`);
+  if (!ok) { showToast(data.error||'Access denied','error'); return; }
+
+  document.getElementById('users-tbody').innerHTML = data.map(u => `
+    <tr id="user-row-${u.id}">
+      <td>${u.id}</td>
+      <td><strong>${esc(u.name)}</strong></td>
+      <td>${statusBadge(u.role)}</td>
+      <td>
+        <select class="form-control form-control-sm" id="role-sel-${u.id}">
+          <option value="student" ${u.role==='student'?'selected':''}>Student</option>
+          <option value="teacher" ${u.role==='teacher'?'selected':''}>Teacher</option>
+          <option value="admin"   ${u.role==='admin'?'selected':''}>Admin</option>
+        </select>
+      </td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="saveUserRole(${u.id})">Save</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function saveUserRole(uid) {
+  const newRole = document.getElementById(`role-sel-${uid}`).value;
+  const { ok, data } = await api('PATCH', `/api/users/${uid}/role`, {
+    user_id: S.userId, role: newRole
+  });
+  if (ok) {
+    showToast(`Role updated to ${newRole}`, 'success');
+    loadUsers();
+    // If changing own role, update context
+    if (uid === S.userId) {
+      const name = S.userName;
+      switchUser(uid, newRole, name);
+    }
+  } else {
+    showToast(data.error||'Error', 'error');
+  }
+}
+
+// ─── Subjects (admin) ─────────────────────────────────────────────────────────
+async function loadSubjects() {
+  await fetchSubjects();
+  const el = document.getElementById('subjects-list');
+  el.innerHTML = S.subjects.map(s => `
+    <div class="subject-manage-row">
+      <span class="subject-name">${esc(s.name)}</span>
+      <span class="badge ${s.active?'approved':'rejected'}">${s.active?'Active':'Inactive'}</span>
+      <button class="btn btn-sm ${s.active?'btn-warning':'btn-success'}"
+        onclick="toggleSubject(${s.id}, ${!s.active})">
+        ${s.active?'Deactivate':'Activate'}
+      </button>
+    </div>
+  `).join('');
+}
+
+async function toggleSubject(sid, active) {
+  const { ok } = await api('PATCH', `/api/subjects/${sid}`, { user_id: S.userId, active });
+  if (ok) { showToast(`Subject ${active?'activated':'deactivated'}`, 'success'); loadSubjects(); }
+}
+
+document.getElementById('add-subject-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = document.getElementById('new-subject-name').value.trim();
+  const { ok, data } = await api('POST', '/api/subjects', { user_id: S.userId, name });
+  if (ok) {
+    showToast('Subject added!', 'success');
+    document.getElementById('new-subject-name').value = '';
+    loadSubjects();
+  } else {
+    showToast(data.error||'Error', 'error');
+  }
+});
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+async function init() {
+  await fetchSubjects();
+  switchUser(1, 'student', 'Hamish');
+}
+
+init();
+</script>
+</body>
 </html>
