@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Tutor (OpenRouter + Gemini 2.5 Flash Lite)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="header">
+        <h1>AI Tutor</h1>
+        <p>Model: <code>{{ model }}</code></p>
+      </header>
+
+      <section class="panel">
+        <h2>Ask a question</h2>
+        <form id="tutor-form">
+          <label>Grade level <input name="grade_level" value="middle school" /></label>
+          <label>Question <textarea name="question" rows="4" placeholder="Ask a math, science, or writing question..." required></textarea></label>
+          <button type="submit">Get tutor response</button>
+        </form>
+      </section>
+
+      <section class="panel" id="latest-response" hidden>
+        <h2>Latest tutor response</h2>
+        <div class="card-grid">
+          <article class="card"><h3>Concept summary</h3><p id="concept-summary"></p></article>
+          <article class="card"><h3>Explanation</h3><p id="explanation"></p></article>
+          <article class="card"><h3>Worked example</h3><p id="worked-example"></p></article>
+          <article class="card"><h3>Next step hint</h3><p id="next-step-hint"></p></article>
+        </div>
+        <article class="card full"><h3>Check understanding</h3><ul id="check-understanding"></ul></article>
+        <article class="card full"><h3>Raw JSON response</h3><pre id="output"></pre></article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title-row">
+          <h2>Recent community history</h2>
+          <button id="refresh-history" type="button">Refresh</button>
+        </div>
+        <div id="history-list" class="history-list"></div>
+      </section>
+    </main>
+
+    <script>
+      const form = document.getElementById('tutor-form');
+      const output = document.getElementById('output');
+      const latest = document.getElementById('latest-response');
+      const historyList = document.getElementById('history-list');
+
+      function esc(s) {
+        return (s ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      }
+
+      function renderLatest(result, wholeJson) {
+        latest.hidden = false;
+        document.getElementById('concept-summary').textContent = result.concept_summary || '';
+        document.getElementById('explanation').textContent = result.explanation || '';
+        document.getElementById('worked-example').textContent = result.worked_example || '';
+        document.getElementById('next-step-hint').textContent = result.next_step_hint || '';
+
+        const check = document.getElementById('check-understanding');
+        check.innerHTML = '';
+        (result.check_understanding || []).forEach((item) => {
+          const li = document.createElement('li');
+          li.textContent = item;
+          check.appendChild(li);
+        });
+
+        output.textContent = JSON.stringify(wholeJson, null, 2);
+      }
+
+      function renderHistory(items) {
+        if (!items.length) {
+          historyList.innerHTML = '<p class="muted">No saved tutor sessions yet.</p>';
+          return;
+        }
+
+        historyList.innerHTML = items.map((item) => {
+          const checks = (item.result.check_understanding || []).map((x) => `<li>${esc(x)}</li>`).join('');
+          return `
+            <article class="history-item">
+              <h3>#${item.id} • ${esc(item.grade_level)} • ${esc(item.created_at)}</h3>
+              <p><strong>Question:</strong> ${esc(item.question)}</p>
+              <p><strong>Concept summary:</strong> ${esc(item.result.concept_summary)}</p>
+              <details>
+                <summary>Show full tutor answer + JSON</summary>
+                <p><strong>Explanation:</strong> ${esc(item.result.explanation)}</p>
+                <p><strong>Worked example:</strong> ${esc(item.result.worked_example)}</p>
+                <p><strong>Next step hint:</strong> ${esc(item.result.next_step_hint)}</p>
+                <p><strong>Check understanding:</strong></p>
+                <ul>${checks}</ul>
+                <pre>${esc(JSON.stringify(item.raw_json, null, 2))}</pre>
+              </details>
+            </article>
+          `;
+        }).join('');
+      }
+
+      async function loadHistory() {
+        const res = await fetch('/api/history');
+        const data = await res.json();
+        renderHistory(data.sessions || []);
+      }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        output.textContent = 'Loading...';
+
+        const fd = new FormData(form);
+        const res = await fetch('/api/tutor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grade_level: fd.get('grade_level'),
+            question: fd.get('question')
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          latest.hidden = false;
+          output.textContent = JSON.stringify(data, null, 2);
+          return;
+        }
+
+        renderLatest(data.result, data);
+        await loadHistory();
+      });
+
+      document.getElementById('refresh-history').addEventListener('click', loadHistory);
+      loadHistory();
+    </script>
+  </body>
+</html>
