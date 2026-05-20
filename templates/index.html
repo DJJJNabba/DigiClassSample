@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Tutor (OpenRouter + Gemini 2.5 Flash Lite)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>AI Tutor</h1>
+      <p>Model: <code>{{ model }}</code></p>
+
+      <form id="tutor-form">
+        <label>Grade level <input name="grade_level" value="middle school" /></label>
+        <label>Question <textarea name="question" rows="4" placeholder="Ask a math, science, or writing question..." required></textarea></label>
+        <button type="submit">Get tutor response</button>
+      </form>
+
+      <section>
+        <h2>Response</h2>
+        <pre id="output">{ "status": "waiting" }</pre>
+      </section>
+    </main>
+    <script>
+      const form = document.getElementById('tutor-form');
+      const output = document.getElementById('output');
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        output.textContent = 'Loading...';
+
+        const res = await fetch('/api/tutor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grade_level: fd.get('grade_level'),
+            question: fd.get('question')
+          })
+        });
+
+        const data = await res.json();
+        output.textContent = JSON.stringify(data, null, 2);
+      });
+    </script>
+  </body>
+</html>
