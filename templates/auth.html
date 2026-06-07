@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ 'Create account' if mode == 'register' else 'Sign in' }} · DigiClass</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body class="auth-body">
+
+<div class="auth-shell">
+  <!-- Brand / marketing side -->
+  <aside class="auth-aside">
+    <div class="auth-aside-inner">
+      <div class="auth-brand">
+        <span class="auth-brand-icon">🎓</span>
+        <span class="auth-brand-name">DigiClass</span>
+      </div>
+      <h1 class="auth-headline">Smarter study, made simple.</h1>
+      <p class="auth-tagline">
+        AI-assisted quizzes and flashcards, reviewed by your teachers and
+        organised by subject — so every student practises with content they
+        can trust.
+      </p>
+      <ul class="auth-points">
+        <li><span>📚</span> A shared library of approved learning content</li>
+        <li><span>🎯</span> Practise quizzes and track your accuracy over time</li>
+        <li><span>🃏</span> Study with interactive flashcards</li>
+        <li><span>✅</span> Teacher-reviewed for quality and accuracy</li>
+      </ul>
+    </div>
+    <div class="auth-aside-foot">Trusted by classrooms · {{ '%d'|format(2026) }}</div>
+  </aside>
+
+  <!-- Form side -->
+  <main class="auth-main">
+    <div class="auth-card">
+      <div class="auth-card-head">
+        <div class="auth-brand mobile-only">
+          <span class="auth-brand-icon">🎓</span>
+          <span class="auth-brand-name">DigiClass</span>
+        </div>
+        <h2 id="form-title">{{ 'Create your account' if mode == 'register' else 'Welcome back' }}</h2>
+        <p id="form-sub" class="auth-sub">
+          {{ 'Join your class and start learning.' if mode == 'register' else 'Sign in to continue to your dashboard.' }}
+        </p>
+      </div>
+
+      <div id="auth-error" class="auth-alert hidden"></div>
+
+      <form id="auth-form" novalidate>
+        <label class="auth-field" id="name-field" {% if mode != 'register' %}style="display:none"{% endif %}>
+          <span>Full name</span>
+          <input type="text" id="name" autocomplete="name" placeholder="e.g. Hamish Reid" />
+        </label>
+
+        <label class="auth-field">
+          <span>Email address</span>
+          <input type="email" id="email" autocomplete="email" placeholder="you@school.edu" required />
+        </label>
+
+        <label class="auth-field">
+          <span>Password</span>
+          <input type="password" id="password" autocomplete="current-password" placeholder="••••••••" required />
+          <small class="auth-hint" id="pw-hint" {% if mode != 'register' %}style="display:none"{% endif %}>
+            At least 8 characters.
+          </small>
+        </label>
+
+        <button type="submit" class="btn btn-primary btn-lg auth-submit" id="auth-submit">
+          {{ 'Create account' if mode == 'register' else 'Sign in' }}
+        </button>
+      </form>
+
+      <p class="auth-switch">
+        <span id="switch-prompt">{{ 'Already have an account?' if mode == 'register' else "Don't have an account?" }}</span>
+        <a href="#" id="switch-link">{{ 'Sign in' if mode == 'register' else 'Create one' }}</a>
+      </p>
+
+      <div class="auth-demo" id="demo-box">
+        <div class="auth-demo-title">Demo accounts <span>password: <code>Learn2024!</code></span></div>
+        <div class="auth-demo-grid">
+          <button type="button" class="demo-chip" data-email="hamish.reid@student.digiclass.edu">👨‍🎓 Student</button>
+          <button type="button" class="demo-chip" data-email="a.morgan@digiclass.edu">👩‍🏫 Teacher</button>
+          <button type="button" class="demo-chip" data-email="r.calloway@digiclass.edu">👩‍💼 Admin</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// Jinja sets the initial mode; the toggle link below swaps it client-side.
+let mode = "{{ mode }}";
+
+const $ = (id) => document.getElementById(id);
+
+function applyMode() {
+  const isReg = mode === 'register';
+  $('form-title').textContent = isReg ? 'Create your account' : 'Welcome back';
+  $('form-sub').textContent  = isReg ? 'Join your class and start learning.' : 'Sign in to continue to your dashboard.';
+  $('name-field').style.display = isReg ? '' : 'none';
+  $('pw-hint').style.display = isReg ? '' : 'none';
+  $('auth-submit').textContent = isReg ? 'Create account' : 'Sign in';
+  $('switch-prompt').textContent = isReg ? 'Already have an account?' : "Don't have an account?";
+  $('switch-link').textContent = isReg ? 'Sign in' : 'Create one';
+  $('demo-box').style.display = isReg ? 'none' : '';
+  $('password').setAttribute('autocomplete', isReg ? 'new-password' : 'current-password');
+  hideError();
+  // Keep the URL honest without reloading.
+  history.replaceState(null, '', isReg ? '/register' : '/login');
+}
+
+function showError(msg) {
+  const el = $('auth-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function hideError() { $('auth-error').classList.add('hidden'); }
+
+$('switch-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  mode = mode === 'register' ? 'login' : 'register';
+  applyMode();
+});
+
+document.querySelectorAll('.demo-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    $('email').value = chip.dataset.email;
+    $('password').value = 'Learn2024!';
+    $('auth-form').requestSubmit();
+  });
+});
+
+$('auth-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  hideError();
+
+  const email = $('email').value.trim();
+  const password = $('password').value;
+  const name = $('name').value.trim();
+
+  if (!email || !password) { showError('Please enter your email and password.'); return; }
+  if (mode === 'register' && name.length < 2) { showError('Please enter your full name.'); return; }
+  if (mode === 'register' && password.length < 8) { showError('Password must be at least 8 characters.'); return; }
+
+  const btn = $('auth-submit');
+  btn.disabled = true;
+  btn.textContent = mode === 'register' ? 'Creating account…' : 'Signing in…';
+
+  const path = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+  const body = mode === 'register' ? { name, email, password } : { email, password };
+
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showError(data.error || 'Something went wrong. Please try again.');
+      btn.disabled = false;
+      btn.textContent = mode === 'register' ? 'Create account' : 'Sign in';
+      return;
+    }
+    window.location.href = '/';
+  } catch (err) {
+    showError('Network error. Please check your connection and try again.');
+    btn.disabled = false;
+    btn.textContent = mode === 'register' ? 'Create account' : 'Sign in';
+  }
+});
+
+applyMode();
+</script>
+</body>
+</html>

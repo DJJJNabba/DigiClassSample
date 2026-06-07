@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 .env
+.venv/
+venv/
+
+# SQLite database files (created at runtime)
+*.db
+*.db-journal
+*.sqlite3

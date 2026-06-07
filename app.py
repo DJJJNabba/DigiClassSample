@@ -1,190 +1,55 @@
+"""DigiClass — an AI-assisted learning platform.
+
+A Flask application with session-based authentication, role-based access
+control, and an SQLite datastore. Teachers and students generate practice
+quizzes and flashcard sets with AI assistance; teachers review and publish
+content to a shared library that students practise against.
+"""
+
 import json
 import os
+import secrets
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any
+from functools import wraps
+from typing import Any, Callable
 
 import requests
-from flask import Flask, g, jsonify, render_template, request
+from flask import (
+    Flask,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from werkzeug.security import check_password_hash, generate_password_hash
+
+import seed
 
 app = Flask(__name__)
 
+# ─── Configuration ─────────────────────────────────────────────────────────────
+# SECRET_KEY signs the session cookie. Always set a stable value in production
+# (export SECRET_KEY=...). A random key is generated as a fallback so the app
+# still boots in development, but sessions will not survive a restart.
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# Enable secure cookies when served over HTTPS (recommended behind a TLS proxy).
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "0") == "1"
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "google/gemini-2.5-flash-lite"
-DB_PATH = os.getenv("DATABASE_PATH", "tutor.db")
+MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash-lite")
+DB_PATH = os.getenv("DATABASE_PATH", "digiclass.db")
 
-DEMO_USERS = [
-    (1, "Hamish", "student"),
-    (2, "Alex", "teacher"),
-    (3, "Ruth", "admin"),
-]
+ROLES = ("student", "teacher", "admin")
 
-DEMO_SUBJECTS = [
-    (1, "Digital Solutions"),
-    (2, "Mathematics"),
-    (3, "Biology"),
-    (4, "Chemistry"),
-    (5, "English"),
-    (6, "History"),
-]
 
-SAMPLE_QUIZ_1 = {
-    "topic": "SQL Fundamentals",
-    "subject": "Digital Solutions",
-    "difficulty": "medium",
-    "questions": [
-        {
-            "question": "Which SQL clause is used to filter records after a GROUP BY has been applied?",
-            "answers": [
-                {"id": "a", "text": "WHERE", "correct": False},
-                {"id": "b", "text": "HAVING", "correct": True},
-                {"id": "c", "text": "FILTER", "correct": False},
-                {"id": "d", "text": "LIMIT", "correct": False},
-            ],
-            "explanation": "HAVING is used to filter grouped results, whereas WHERE filters rows before grouping.",
-        },
-        {
-            "question": "What does SQL stand for?",
-            "answers": [
-                {"id": "a", "text": "Structured Query Language", "correct": True},
-                {"id": "b", "text": "Simple Query Language", "correct": False},
-                {"id": "c", "text": "Sequential Query Logic", "correct": False},
-                {"id": "d", "text": "Standard Query Library", "correct": False},
-            ],
-            "explanation": "SQL stands for Structured Query Language, the standard language for relational database management.",
-        },
-        {
-            "question": "Which SQL command retrieves data from a table?",
-            "answers": [
-                {"id": "a", "text": "INSERT", "correct": False},
-                {"id": "b", "text": "UPDATE", "correct": False},
-                {"id": "c", "text": "SELECT", "correct": True},
-                {"id": "d", "text": "FETCH", "correct": False},
-            ],
-            "explanation": "SELECT is used to query and retrieve data from one or more database tables.",
-        },
-        {
-            "question": "What is a PRIMARY KEY in a relational database?",
-            "answers": [
-                {"id": "a", "text": "A key used to encrypt data", "correct": False},
-                {"id": "b", "text": "A unique identifier for each row in a table", "correct": True},
-                {"id": "c", "text": "The first column in any table", "correct": False},
-                {"id": "d", "text": "A foreign reference to another table", "correct": False},
-            ],
-            "explanation": "A PRIMARY KEY uniquely identifies each record in a table and cannot contain NULL values.",
-        },
-    ],
-}
-
-SAMPLE_QUIZ_2 = {
-    "topic": "Cybersecurity Principles",
-    "subject": "Digital Solutions",
-    "difficulty": "hard",
-    "questions": [
-        {
-            "question": "Which attack involves an attacker intercepting communication between two parties?",
-            "answers": [
-                {"id": "a", "text": "SQL Injection", "correct": False},
-                {"id": "b", "text": "Man-in-the-Middle (MitM)", "correct": True},
-                {"id": "c", "text": "Denial of Service", "correct": False},
-                {"id": "d", "text": "Phishing", "correct": False},
-            ],
-            "explanation": "A Man-in-the-Middle attack occurs when an attacker secretly relays and possibly alters communications between two parties.",
-        },
-        {
-            "question": "What does HTTPS use to secure data transmission?",
-            "answers": [
-                {"id": "a", "text": "Base64 encoding", "correct": False},
-                {"id": "b", "text": "TLS/SSL encryption", "correct": True},
-                {"id": "c", "text": "MD5 hashing", "correct": False},
-                {"id": "d", "text": "ZIP compression", "correct": False},
-            ],
-            "explanation": "HTTPS uses TLS (Transport Layer Security) or its predecessor SSL to encrypt data transmitted between client and server.",
-        },
-        {
-            "question": "What is the principle of least privilege?",
-            "answers": [
-                {"id": "a", "text": "Users should have maximum access for efficiency", "correct": False},
-                {"id": "b", "text": "Only admins should access the system", "correct": False},
-                {"id": "c", "text": "Users should only have the minimum access needed for their role", "correct": True},
-                {"id": "d", "text": "Passwords should be as simple as possible", "correct": False},
-            ],
-            "explanation": "The principle of least privilege limits user access rights to only what is necessary for their role, reducing security risks.",
-        },
-    ],
-}
-
-SAMPLE_FLASHCARDS = {
-    "topic": "Caesar Cipher",
-    "category": "Cryptography",
-    "difficulty": "easy",
-    "flashcards": [
-        {
-            "id": 1,
-            "type": "summary",
-            "front": "What is the Caesar Cipher?",
-            "back": "A substitution cipher where each letter in the plaintext is shifted a fixed number of positions down the alphabet.",
-            "tags": ["definition", "overview"],
-        },
-        {
-            "id": 2,
-            "type": "summary",
-            "front": "Who invented the Caesar Cipher and when?",
-            "back": "Julius Caesar, used around 58 BC to protect military communications.",
-            "tags": ["history", "origin"],
-        },
-        {
-            "id": 3,
-            "type": "detail",
-            "front": "How does a Caesar Cipher with a shift of 3 encode the letter 'A'?",
-            "back": "A → D. Each letter moves 3 places forward: A→D, B→E, C→F, and so on.",
-            "tags": ["mechanics", "example"],
-        },
-        {
-            "id": 4,
-            "type": "detail",
-            "front": "How is a Caesar Cipher decoded?",
-            "back": "Reverse the shift — subtract the key number from each letter's position in the alphabet.",
-            "tags": ["decryption", "mechanics"],
-        },
-        {
-            "id": 5,
-            "type": "detail",
-            "front": "Why is the Caesar Cipher considered insecure today?",
-            "back": "There are only 25 possible shifts, making it trivially easy to brute-force. Frequency analysis can also crack it.",
-            "tags": ["security", "weakness"],
-        },
-    ],
-}
-
-SAMPLE_PENDING_QUIZ = {
-    "topic": "Recursion in Algorithms",
-    "subject": "Digital Solutions",
-    "difficulty": "hard",
-    "questions": [
-        {
-            "question": "What is the base case in a recursive function?",
-            "answers": [
-                {"id": "a", "text": "The first call to the function", "correct": False},
-                {"id": "b", "text": "The condition that stops the recursion", "correct": True},
-                {"id": "c", "text": "The return type of the function", "correct": False},
-                {"id": "d", "text": "The recursive call inside the function", "correct": False},
-            ],
-            "explanation": "The base case is a condition where the function stops calling itself, preventing infinite recursion.",
-        },
-        {
-            "question": "What happens if a recursive function has no base case?",
-            "answers": [
-                {"id": "a", "text": "It returns None automatically", "correct": False},
-                {"id": "b", "text": "It runs exactly twice", "correct": False},
-                {"id": "c", "text": "It causes a stack overflow error", "correct": True},
-                {"id": "d", "text": "It compiles but never executes", "correct": False},
-            ],
-            "explanation": "Without a base case, the function calls itself indefinitely until the call stack is exhausted, causing a stack overflow.",
-        },
-    ],
-}
+# ─── Database bootstrap ─────────────────────────────────────────────────────────
 
 
 def _bootstrap_db() -> None:
@@ -193,9 +58,12 @@ def _bootstrap_db() -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('student','teacher','admin')),
+            active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         );
 
@@ -248,104 +116,24 @@ def _bootstrap_db() -> None:
             is_correct INTEGER NOT NULL,
             answered_at TEXT NOT NULL
         );
+
+        CREATE INDEX IF NOT EXISTS idx_content_status ON content_items(status);
+        CREATE INDEX IF NOT EXISTS idx_content_subject ON content_items(subject_id);
+        CREATE INDEX IF NOT EXISTS idx_questions_content ON quiz_questions(content_id);
+        CREATE INDEX IF NOT EXISTS idx_responses_user ON user_responses(user_id);
         """
     )
-
-    now = datetime.now(timezone.utc).isoformat()
-
-    for uid, name, role in DEMO_USERS:
-        conn.execute(
-            "INSERT OR IGNORE INTO users (id, name, role, created_at) VALUES (?, ?, ?, ?)",
-            (uid, name, role, now),
-        )
-
-    for sid, name in DEMO_SUBJECTS:
-        conn.execute(
-            "INSERT OR IGNORE INTO subjects (id, name, active) VALUES (?, ?, 1)",
-            (sid, name),
-        )
-
-    # Seed sample approved content if DB is fresh
-    existing = conn.execute("SELECT COUNT(*) FROM content_items").fetchone()[0]
-    if existing == 0:
-        _seed_sample_content(conn, now)
-
     conn.commit()
     conn.close()
 
-
-def _seed_sample_content(conn: sqlite3.Connection, now: str) -> None:
-    def insert_quiz(data: dict, creator: int, subject_id: int, status: str) -> None:
-        cur = conn.execute(
-            """INSERT INTO content_items
-               (created_by, subject_id, topic, difficulty, content_type, status,
-                reviewed_by, reviewed_at, created_at, raw_json)
-               VALUES (?, ?, ?, ?, 'quiz', ?, ?, ?, ?, ?)""",
-            (
-                creator,
-                subject_id,
-                data["topic"],
-                data["difficulty"],
-                status,
-                2 if status == "approved" else None,
-                now if status == "approved" else None,
-                now,
-                json.dumps(data),
-            ),
-        )
-        cid = cur.lastrowid
-        for i, q in enumerate(data["questions"]):
-            conn.execute(
-                """INSERT INTO quiz_questions
-                   (content_id, question_order, question, options_json, explanation)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (cid, i, q["question"], json.dumps(q["answers"]), q["explanation"]),
-            )
-
-    def insert_flashcard(data: dict, creator: int, subject_id: int, status: str) -> None:
-        cur = conn.execute(
-            """INSERT INTO content_items
-               (created_by, subject_id, topic, difficulty, content_type, status,
-                reviewed_by, reviewed_at, created_at, raw_json)
-               VALUES (?, ?, ?, ?, 'flashcard', ?, ?, ?, ?, ?)""",
-            (
-                creator,
-                subject_id,
-                data["topic"],
-                data["difficulty"],
-                status,
-                2 if status == "approved" else None,
-                now if status == "approved" else None,
-                now,
-                json.dumps(data),
-            ),
-        )
-        cid = cur.lastrowid
-        for i, fc in enumerate(data["flashcards"]):
-            conn.execute(
-                """INSERT INTO flashcards
-                   (content_id, card_order, front, back, card_type, tags_json)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    cid,
-                    i,
-                    fc["front"],
-                    fc["back"],
-                    fc.get("type", "summary"),
-                    json.dumps(fc.get("tags", [])),
-                ),
-            )
-
-    insert_quiz(SAMPLE_QUIZ_1, creator=2, subject_id=1, status="approved")
-    insert_flashcard(SAMPLE_FLASHCARDS, creator=2, subject_id=1, status="approved")
-    insert_quiz(SAMPLE_QUIZ_2, creator=2, subject_id=1, status="approved")
-    insert_quiz(SAMPLE_PENDING_QUIZ, creator=1, subject_id=1, status="pending")
+    # Populate a fresh database with a realistic demonstration dataset.
+    seed.seed_if_empty(DB_PATH)
 
 
 _bootstrap_db()
 
 
-# ─── DB helpers ──────────────────────────────────────────────────────────────
+# ─── DB helpers ─────────────────────────────────────────────────────────────────
 
 
 def get_db() -> sqlite3.Connection:
@@ -365,41 +153,176 @@ def close_db(_exc: Any) -> None:
 
 
 def get_user(user_id: int) -> dict | None:
-    row = get_db().execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    row = get_db().execute(
+        "SELECT id, name, email, role, active, created_at FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
     return dict(row) if row else None
 
 
-def check_role(user_id: int, *roles: str) -> tuple[dict | None, Any]:
-    user = get_user(user_id)
-    if not user:
-        return None, (jsonify({"error": "User not found"}), 404)
-    if user["role"] not in roles:
-        return None, (jsonify({"error": f"Access denied. Requires role: {' or '.join(roles)}"}), 403)
-    return user, None
+def current_user() -> dict | None:
+    """Return the authenticated user for this request, or None."""
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    user = get_user(uid)
+    if not user or not user["active"]:
+        session.clear()
+        return None
+    return user
 
 
-# ─── Routes ──────────────────────────────────────────────────────────────────
+# ─── Auth guards ────────────────────────────────────────────────────────────────
+
+
+def login_required(fn: Callable) -> Callable:
+    @wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if current_user() is None:
+            return jsonify({"error": "Authentication required"}), 401
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def role_required(*roles: str) -> Callable:
+    def decorator(fn: Callable) -> Callable:
+        @wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            user = current_user()
+            if user is None:
+                return jsonify({"error": "Authentication required"}), 401
+            if user["role"] not in roles:
+                return jsonify({"error": "You do not have permission to do that"}), 403
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+# ─── Page routes ────────────────────────────────────────────────────────────────
 
 
 @app.route("/")
-def home() -> str:
-    return render_template("index.html", model=MODEL, demo_users=DEMO_USERS)
+def home() -> Any:
+    user = current_user()
+    if user is None:
+        return redirect(url_for("login_page"))
+    return render_template("index.html", user=user)
+
+
+@app.route("/login")
+def login_page() -> Any:
+    if current_user() is not None:
+        return redirect(url_for("home"))
+    return render_template("auth.html", mode="login")
+
+
+@app.route("/register")
+def register_page() -> Any:
+    if current_user() is not None:
+        return redirect(url_for("home"))
+    return render_template("auth.html", mode="register")
+
+
+@app.route("/logout")
+def logout() -> Any:
+    session.clear()
+    return redirect(url_for("login_page"))
+
+
+@app.route("/health")
+def health() -> Any:
+    return jsonify({"status": "ok", "time": datetime.now(timezone.utc).isoformat()})
+
+
+# ─── Auth API ───────────────────────────────────────────────────────────────────
+
+
+def _normalise_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+@app.route("/api/auth/register", methods=["POST"])
+def api_register() -> Any:
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    email = _normalise_email(data.get("email"))
+    password = data.get("password") or ""
+
+    if not name or len(name) < 2:
+        return jsonify({"error": "Please enter your full name"}), 400
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return jsonify({"error": "Please enter a valid email address"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+    db = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        cur = db.execute(
+            """INSERT INTO users (name, email, password_hash, role, active, created_at)
+               VALUES (?, ?, ?, 'student', 1, ?)""",
+            (name, email, generate_password_hash(password), now),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "An account with that email already exists"}), 409
+
+    session.clear()
+    session["user_id"] = cur.lastrowid
+    return jsonify(get_user(cur.lastrowid)), 201
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_login() -> Any:
+    data = request.get_json(silent=True) or {}
+    email = _normalise_email(data.get("email"))
+    password = data.get("password") or ""
+
+    row = get_db().execute(
+        "SELECT * FROM users WHERE email = ?", (email,)
+    ).fetchone()
+
+    if not row or not check_password_hash(row["password_hash"], password):
+        return jsonify({"error": "Incorrect email or password"}), 401
+    if not row["active"]:
+        return jsonify({"error": "This account has been deactivated"}), 403
+
+    session.clear()
+    session["user_id"] = row["id"]
+    return jsonify(get_user(row["id"]))
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_logout() -> Any:
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/me", methods=["GET"])
+def api_me() -> Any:
+    user = current_user()
+    if user is None:
+        return jsonify({"error": "Not authenticated"}), 401
+    return jsonify(user)
+
+
+# ─── Subjects ───────────────────────────────────────────────────────────────────
 
 
 @app.route("/api/subjects", methods=["GET"])
+@login_required
 def list_subjects() -> Any:
     rows = get_db().execute("SELECT * FROM subjects ORDER BY name").fetchall()
     return jsonify([dict(r) for r in rows])
 
 
 @app.route("/api/subjects", methods=["POST"])
+@role_required("admin")
 def create_subject() -> Any:
     data = request.get_json(silent=True) or {}
-    user_id = int(data.get("user_id", 0))
-    user, err = check_role(user_id, "admin")
-    if err:
-        return err
-
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Subject name is required"}), 400
@@ -415,13 +338,9 @@ def create_subject() -> Any:
 
 
 @app.route("/api/subjects/<int:sid>", methods=["PATCH"])
+@role_required("admin")
 def update_subject(sid: int) -> Any:
     data = request.get_json(silent=True) or {}
-    user_id = int(data.get("user_id", 0))
-    user, err = check_role(user_id, "admin")
-    if err:
-        return err
-
     db = get_db()
     if "active" in data:
         db.execute(
@@ -433,27 +352,32 @@ def update_subject(sid: int) -> Any:
     return jsonify(dict(row)) if row else (jsonify({"error": "Not found"}), 404)
 
 
+# ─── Users (admin) ──────────────────────────────────────────────────────────────
+
+
 @app.route("/api/users", methods=["GET"])
+@role_required("admin")
 def list_users() -> Any:
-    user_id = int(request.args.get("user_id", 0))
-    _, err = check_role(user_id, "admin")
-    if err:
-        return err
-    rows = get_db().execute("SELECT id, name, role, created_at FROM users ORDER BY id").fetchall()
+    rows = get_db().execute(
+        """SELECT u.id, u.name, u.email, u.role, u.active, u.created_at,
+                  (SELECT COUNT(*) FROM content_items ci WHERE ci.created_by = u.id) AS content_count,
+                  (SELECT COUNT(*) FROM user_responses ur WHERE ur.user_id = u.id) AS response_count
+           FROM users u ORDER BY u.role, u.name"""
+    ).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
 @app.route("/api/users/<int:uid>/role", methods=["PATCH"])
+@role_required("admin")
 def update_user_role(uid: int) -> Any:
     data = request.get_json(silent=True) or {}
-    user_id = int(data.get("user_id", 0))
-    _, err = check_role(user_id, "admin")
-    if err:
-        return err
-
     new_role = data.get("role", "")
-    if new_role not in ("student", "teacher", "admin"):
+    if new_role not in ROLES:
         return jsonify({"error": "Invalid role. Must be student, teacher, or admin"}), 400
+
+    me = current_user()
+    if uid == me["id"] and new_role != "admin":
+        return jsonify({"error": "You cannot remove your own admin access"}), 400
 
     db = get_db()
     db.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, uid))
@@ -462,16 +386,20 @@ def update_user_role(uid: int) -> Any:
     return jsonify(dict(row)) if row else (jsonify({"error": "Not found"}), 404)
 
 
+# ─── AI content generation ──────────────────────────────────────────────────────
+
+
 @app.route("/api/generate", methods=["POST"])
+@login_required
 def generate_content() -> Any:
     if not OPENROUTER_API_KEY:
-        return jsonify({"error": "OPENROUTER_API_KEY is not configured. Add it to your .env file."}), 500
+        return jsonify({
+            "error": "AI generation is not configured on this server.",
+            "details": "Set the OPENROUTER_API_KEY environment variable to enable it.",
+        }), 503
 
+    user = current_user()
     data = request.get_json(silent=True) or {}
-    user_id = int(data.get("user_id", 0))
-    user, err = check_role(user_id, "student", "teacher", "admin")
-    if err:
-        return err
 
     subject_id = data.get("subject_id")
     topic = (data.get("topic") or "").strip()
@@ -488,7 +416,9 @@ def generate_content() -> Any:
 
     subject_name = ""
     if subject_id:
-        sub = get_db().execute("SELECT name FROM subjects WHERE id = ?", (subject_id,)).fetchone()
+        sub = get_db().execute(
+            "SELECT name FROM subjects WHERE id = ?", (subject_id,)
+        ).fetchone()
         subject_name = sub["name"] if sub else ""
 
     if content_type == "quiz":
@@ -612,7 +542,7 @@ def generate_content() -> Any:
             """INSERT INTO content_items
                (created_by, subject_id, topic, difficulty, content_type, status, created_at, raw_json)
                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)""",
-            (user_id, subject_id, topic, difficulty, content_type, now, json.dumps(parsed)),
+            (user["id"], subject_id, topic, difficulty, content_type, now, json.dumps(parsed)),
         )
         content_id = cur.lastrowid
 
@@ -655,26 +585,27 @@ def generate_content() -> Any:
         ), 201
 
     except requests.HTTPError:
-        return jsonify({"error": "OpenRouter request failed", "details": resp.text}), resp.status_code
+        return jsonify({"error": "AI provider request failed", "details": resp.text}), 502
     except (KeyError, ValueError, json.JSONDecodeError) as exc:
         return jsonify({"error": "Invalid AI response format", "details": str(exc)}), 502
     except requests.RequestException as exc:
-        return jsonify({"error": "Network error calling OpenRouter", "details": str(exc)}), 502
+        return jsonify({"error": "Network error contacting the AI provider", "details": str(exc)}), 502
+
+
+# ─── Content library ────────────────────────────────────────────────────────────
 
 
 @app.route("/api/content", methods=["GET"])
+@login_required
 def list_content() -> Any:
-    user_id = int(request.args.get("user_id", 0))
-    user = get_user(user_id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
+    user = current_user()
 
     filters: list[str] = []
     params: list[Any] = []
 
     if user["role"] == "student":
         filters.append("(ci.status = 'approved' OR ci.created_by = ?)")
-        params.append(user_id)
+        params.append(user["id"])
 
     status = request.args.get("status")
     if status and status in ("pending", "approved", "rejected"):
@@ -696,6 +627,11 @@ def list_content() -> Any:
         filters.append("ci.difficulty = ?")
         params.append(difficulty)
 
+    search = (request.args.get("q") or "").strip()
+    if search:
+        filters.append("ci.topic LIKE ?")
+        params.append(f"%{search}%")
+
     where = "WHERE " + " AND ".join(filters) if filters else ""
 
     rows = get_db().execute(
@@ -703,37 +639,35 @@ def list_content() -> Any:
                    ci.created_at, ci.reviewed_at, ci.subject_id,
                    u.name AS creator_name, ci.created_by,
                    s.name AS subject_name,
-                   ru.name AS reviewer_name
+                   ru.name AS reviewer_name,
+                   (SELECT COUNT(*) FROM quiz_questions q WHERE q.content_id = ci.id) AS question_count,
+                   (SELECT COUNT(*) FROM flashcards f WHERE f.content_id = ci.id) AS card_count
             FROM content_items ci
             JOIN users u ON ci.created_by = u.id
             LEFT JOIN subjects s ON ci.subject_id = s.id
             LEFT JOIN users ru ON ci.reviewed_by = ru.id
             {where}
-            ORDER BY ci.id DESC LIMIT 100""",
+            ORDER BY ci.created_at DESC, ci.id DESC LIMIT 200""",
         params,
     ).fetchall()
 
-    db = get_db()
     result = []
     for row in rows:
         item = dict(row)
-        tbl = "quiz_questions" if item["content_type"] == "quiz" else "flashcards"
-        count = db.execute(
-            f"SELECT COUNT(*) FROM {tbl} WHERE content_id = ?", (item["id"],)
-        ).fetchone()[0]
-        item["item_count"] = count
+        item["item_count"] = (
+            item.pop("question_count") if item["content_type"] == "quiz" else item.pop("card_count")
+        )
+        item.pop("question_count", None)
+        item.pop("card_count", None)
         result.append(item)
 
     return jsonify(result)
 
 
 @app.route("/api/content/<int:cid>", methods=["GET"])
+@login_required
 def get_content(cid: int) -> Any:
-    user_id = int(request.args.get("user_id", 0))
-    user = get_user(user_id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
+    user = current_user()
     db = get_db()
     row = db.execute(
         """SELECT ci.*, u.name AS creator_name, s.name AS subject_name
@@ -749,7 +683,11 @@ def get_content(cid: int) -> Any:
 
     item = dict(row)
 
-    if user["role"] == "student" and item["status"] != "approved" and item["created_by"] != user_id:
+    if (
+        user["role"] == "student"
+        and item["status"] != "approved"
+        and item["created_by"] != user["id"]
+    ):
         return jsonify({"error": "Access denied — content is not yet approved"}), 403
 
     if item["content_type"] == "quiz":
@@ -764,7 +702,7 @@ def get_content(cid: int) -> Any:
             resp = db.execute(
                 """SELECT * FROM user_responses WHERE user_id = ? AND question_id = ?
                    ORDER BY id DESC LIMIT 1""",
-                (user_id, qd["id"]),
+                (user["id"], qd["id"]),
             ).fetchone()
             qd["my_response"] = dict(resp) if resp else None
             item["questions"].append(qd)
@@ -784,13 +722,10 @@ def get_content(cid: int) -> Any:
 
 
 @app.route("/api/content/<int:cid>/status", methods=["PATCH"])
+@role_required("teacher", "admin")
 def update_content_status(cid: int) -> Any:
+    user = current_user()
     data = request.get_json(silent=True) or {}
-    user_id = int(data.get("user_id", 0))
-    _, err = check_role(user_id, "teacher", "admin")
-    if err:
-        return err
-
     new_status = data.get("status")
     if new_status not in ("approved", "rejected", "pending"):
         return jsonify({"error": "Invalid status. Must be approved, rejected, or pending"}), 400
@@ -798,7 +733,7 @@ def update_content_status(cid: int) -> Any:
     db = get_db()
     db.execute(
         "UPDATE content_items SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?",
-        (new_status, user_id, datetime.now(timezone.utc).isoformat(), cid),
+        (new_status, user["id"], datetime.now(timezone.utc).isoformat(), cid),
     )
     db.commit()
     row = db.execute(
@@ -811,14 +746,14 @@ def update_content_status(cid: int) -> Any:
     return jsonify(dict(row)) if row else (jsonify({"error": "Not found"}), 404)
 
 
-@app.route("/api/answer", methods=["POST"])
-def submit_answer() -> Any:
-    data = request.get_json(silent=True) or {}
-    user_id = int(data.get("user_id", 0))
-    user = get_user(user_id)
-    if not user:
-        return jsonify({"error": "User not found"}), 404
+# ─── Practice ───────────────────────────────────────────────────────────────────
 
+
+@app.route("/api/answer", methods=["POST"])
+@login_required
+def submit_answer() -> Any:
+    user = current_user()
+    data = request.get_json(silent=True) or {}
     question_id = data.get("question_id")
     selected_option = (data.get("selected_option") or "").strip()
 
@@ -838,7 +773,13 @@ def submit_answer() -> Any:
         """INSERT INTO user_responses
            (user_id, question_id, selected_option, is_correct, answered_at)
            VALUES (?, ?, ?, ?, ?)""",
-        (user_id, question_id, selected_option, 1 if is_correct else 0, datetime.now(timezone.utc).isoformat()),
+        (
+            user["id"],
+            question_id,
+            selected_option,
+            1 if is_correct else 0,
+            datetime.now(timezone.utc).isoformat(),
+        ),
     )
     db.commit()
 
@@ -853,12 +794,12 @@ def submit_answer() -> Any:
 
 
 @app.route("/api/progress", methods=["GET"])
+@login_required
 def get_progress() -> Any:
-    user_id = int(request.args.get("user_id", 0))
-    if not get_user(user_id):
-        return jsonify({"error": "User not found"}), 404
-
+    user = current_user()
+    user_id = user["id"]
     db = get_db()
+
     total = db.execute(
         "SELECT COUNT(*) FROM user_responses WHERE user_id = ?", (user_id,)
     ).fetchone()[0]
@@ -881,7 +822,8 @@ def get_progress() -> Any:
            JOIN content_items ci ON qq.content_id = ci.id
            LEFT JOIN subjects s ON ci.subject_id = s.id
            WHERE ur.user_id = ?
-           GROUP BY ci.subject_id""",
+           GROUP BY ci.subject_id
+           ORDER BY attempts DESC""",
         (user_id,),
     ).fetchall()
 
@@ -910,12 +852,8 @@ def get_progress() -> Any:
 
 
 @app.route("/api/stats", methods=["GET"])
+@role_required("teacher", "admin")
 def get_stats() -> Any:
-    user_id = int(request.args.get("user_id", 0))
-    _, err = check_role(user_id, "admin", "teacher")
-    if err:
-        return err
-
     db = get_db()
     by_status = db.execute(
         "SELECT status, COUNT(*) AS count FROM content_items GROUP BY status"
@@ -931,12 +869,15 @@ def get_stats() -> Any:
     top_students = db.execute(
         """SELECT u.name, COUNT(ur.id) AS attempts, SUM(ur.is_correct) AS correct
            FROM user_responses ur JOIN users u ON ur.user_id = u.id
-           GROUP BY ur.user_id ORDER BY attempts DESC LIMIT 5""",
+           GROUP BY ur.user_id ORDER BY attempts DESC LIMIT 6""",
     ).fetchall()
 
     return jsonify(
         {
             "total_users": db.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+            "total_students": db.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'student'"
+            ).fetchone()[0],
             "total_content": db.execute("SELECT COUNT(*) FROM content_items").fetchone()[0],
             "total_responses": db.execute("SELECT COUNT(*) FROM user_responses").fetchone()[0],
             "content_by_status": [dict(r) for r in by_status],
@@ -948,4 +889,4 @@ def get_stats() -> Any:
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=os.getenv("FLASK_DEBUG", "1") == "1", port=int(os.getenv("PORT", "5000")))
